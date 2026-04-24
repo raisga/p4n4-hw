@@ -11,7 +11,8 @@ hw/
 │   └── leds-indicator/      # KiCad project: LED indicator prototype board
 └── scripts/
     └── rpi5/
-        └── p4n4_boot_sim.py # Boot sequence simulator (RPi5, GPIO LED)
+        ├── p4n4_boot_sim.py      # Boot sequence simulator (RPi5, GPIO LED)
+        └── p4n4_health_monitor.py # Service health monitor (TCP probe + GPIO LED)
 ```
 
 ## Hardware
@@ -46,6 +47,35 @@ Simulates the p4n4 platform boot sequence on a Raspberry Pi 5 using an LED on GP
 ```bash
 pip install RPi.GPIO
 python3 scripts/rpi5/p4n4_boot_sim.py
+```
+
+### `scripts/rpi5/p4n4_health_monitor.py`
+
+Probes all p4n4 platform services via TCP every 10 seconds and reflects the aggregate health on the same GPIO 17 LED:
+
+| State | LED pattern |
+|---|---|
+| All services up | Double heartbeat pulse every 4 s |
+| Non-critical service(s) down | Slow blink — one blink per failing service |
+| Critical service down (`p4n4-api`) | Rapid 6-pulse alert burst |
+
+A status table is printed to stdout on each sweep:
+
+```
+[p4n4] Health report — 2025-01-15 14:32:00
+  Service                    Port  Status
+  ------------------------  ------  ------
+  mosquitto                  1883  UP
+  influxdb                   8086  UP
+  ...
+  p4n4-api                   8000  DOWN [critical]
+```
+
+**Requirements:** Raspberry Pi 5, `RPi.GPIO`, all p4n4 stack services running locally.
+
+```bash
+pip install RPi.GPIO
+python3 scripts/rpi5/p4n4_health_monitor.py
 ```
 
 ## License
