@@ -3,13 +3,12 @@
 # A short pulse fires for each arriving message; alert topics trigger a rapid burst.
 # Requires: paho-mqtt  (pip install paho-mqtt)
 
-import RPi.GPIO as GPIO
-import paho.mqtt.client as mqtt
+import argparse
 import threading
 import time
-import argparse
-
-LED_PIN = 17  # BCM
+import RPi.GPIO as GPIO
+import paho.mqtt.client as mqtt
+from p4n4_common import setup_gpio, led_off, blink, log
 
 BROKER_HOST = "localhost"
 BROKER_PORT = 1883
@@ -25,52 +24,28 @@ TOPICS = [
 ]
 
 # LED timing (seconds)
-PULSE_ON      = 0.05   # normal message pulse
+PULSE_ON      = 0.05
 PULSE_OFF     = 0.05
-ALERT_ON      = 0.08   # alert burst pulse
+ALERT_ON      = 0.08
 ALERT_OFF     = 0.05
 ALERT_BURSTS  = 5
-IDLE_HEARTBEAT_INTERVAL = 8.0   # slow single blink when no traffic
-
-
-# --- GPIO helpers ---
-
-def setup_gpio():
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setwarnings(False)
-    GPIO.setup(LED_PIN, GPIO.OUT)
-    GPIO.output(LED_PIN, GPIO.LOW)
-
-
-def led_on():
-    GPIO.output(LED_PIN, GPIO.HIGH)
-
-
-def led_off():
-    GPIO.output(LED_PIN, GPIO.LOW)
+IDLE_HEARTBEAT_INTERVAL = 8.0
 
 
 def pulse():
-    led_on()
-    time.sleep(PULSE_ON)
-    led_off()
-    time.sleep(PULSE_OFF)
+    blink(1, PULSE_ON, PULSE_OFF)
 
 
 def alert_burst():
-    for _ in range(ALERT_BURSTS):
-        led_on()
-        time.sleep(ALERT_ON)
-        led_off()
-        time.sleep(ALERT_OFF)
+    blink(ALERT_BURSTS, ALERT_ON, ALERT_OFF)
 
 
 # --- Shared state ---
 
-_lock             = threading.Lock()
-_pending_alert    = False
-_pending_pulse    = False
-_last_message_ts  = 0.0
+_lock            = threading.Lock()
+_pending_alert   = False
+_pending_pulse   = False
+_last_message_ts = 0.0
 
 
 def _mark_message(alert: bool):
@@ -84,10 +59,7 @@ def _mark_message(alert: bool):
 
 
 def _is_alert_topic(topic: str) -> bool:
-    for filter_, alert in TOPICS:
-        if alert and mqtt.topic_matches_sub(filter_, topic):
-            return True
-    return False
+    return any(alert and mqtt.topic_matches_sub(f, topic) for f, alert in TOPICS)
 
 
 # --- MQTT callbacks ---
@@ -101,23 +73,21 @@ def on_connect(client, userdata, flags, rc):
         4: "refused — bad credentials",
         5: "refused — not authorised",
     }
-    status = codes.get(rc, f"unknown rc={rc}")
-    print(f"[p4n4] MQTT {status} ({BROKER_HOST}:{BROKER_PORT})")
+    log(f"MQTT {codes.get(rc, f'unknown rc={rc}')} ({BROKER_HOST}:{BROKER_PORT})")
     if rc == 0:
         for topic, _ in TOPICS:
             client.subscribe(topic)
-            print(f"[p4n4]   subscribed → {topic}")
+            log(f"  subscribed → {topic}")
 
 
 def on_disconnect(client, userdata, rc):
-    print(f"[p4n4] MQTT disconnected (rc={rc}), reconnecting...")
+    log(f"MQTT disconnected (rc={rc}), reconnecting...")
 
 
 def on_message(client, userdata, msg):
     alert = _is_alert_topic(msg.topic)
     _mark_message(alert)
-    tag = "ALERT" if alert else "MSG"
-    print(f"[p4n4] [{tag}] {msg.topic}  ({len(msg.payload)}B)")
+    log(f"[{'ALERT' if alert else 'MSG'}] {msg.topic}  ({len(msg.payload)}B)")
 
 
 # --- LED loop (runs in main thread) ---
@@ -164,12 +134,12 @@ def main():
     client.on_disconnect = on_disconnect
     client.on_message    = on_message
 
-    print(f"[p4n4] Connecting to {args.host}:{args.port}...")
+    log(f"Connecting to {args.host}:{args.port}...")
     client.connect(args.host, args.port, keepalive=KEEPALIVE)
     client.loop_start()
 
     stop_event = threading.Event()
-    print("[p4n4] MQTT indicator running. Ctrl+C to stop.")
+    log("MQTT indicator running. Ctrl+C to stop.")
     try:
         led_loop(stop_event)
     except KeyboardInterrupt:
