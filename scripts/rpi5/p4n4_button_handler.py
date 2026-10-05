@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # Physical button interface for the p4n4 platform on GPIO pin 27 (BCM).
 # Single press  → print a live health report (TCP probe all services).
-# Double press  → restart non-critical Docker services via `docker restart`.
-# Long press    → initiate a graceful system shutdown (requires sudo).
+# Double press  → restart the p4n4 containers via `docker restart`.
+# Long press    → initiate a graceful system shutdown (needs passwordless sudo for
+#                 shutdown; see README).
 #
-# LED on pin 17 gives feedback: pulse = action triggered, burst = restart, fade = shutdown.
+# LED on pin 17 gives feedback: pulse = action triggered, burst = restart,
+# fade = shutdown, rapid blinks = the restart or shutdown failed.
 
 import subprocess
 import time
@@ -37,6 +39,10 @@ def feedback_shutdown():
     fade_out(6, on_time=0.1, factor=0.7)
 
 
+def feedback_failure():
+    blink(6, 0.12, 0.12)
+
+
 # --- Actions ---
 
 def action_health_report():
@@ -46,15 +52,30 @@ def action_health_report():
 
 
 def action_restart_services():
-    log("Restarting non-critical Docker services...")
+    log("Restarting p4n4 containers...")
     feedback_restart()
+    failed = []
     for name in DOCKER_SERVICES:
-        log(f"  docker restart {name}")
         try:
-            subprocess.run(["docker", "restart", name], timeout=30, capture_output=True)
+            result = subprocess.run(
+                ["docker", "restart", name], timeout=60, capture_output=True, text=True
+            )
         except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-            log(f"  warning: {e}")
-    log("Restart complete.")
+            log(f"  {name}: {e}")
+            failed.append(name)
+            continue
+        if result.returncode == 0:
+            log(f"  {name}: restarted")
+        elif "No such container" in result.stderr:
+            log(f"  {name}: not on this host, skipped")
+        else:
+            log(f"  {name}: failed — {result.stderr.strip()}")
+            failed.append(name)
+    if failed:
+        log(f"Restart failed for: {', '.join(failed)}")
+        feedback_failure()
+    else:
+        log("Restart complete.")
 
 
 def action_shutdown():
@@ -69,7 +90,14 @@ def action_shutdown():
     log("Initiating shutdown.")
     feedback_shutdown()
     time.sleep(0.5)
-    subprocess.run(["sudo", "shutdown", "-h", "now"])
+    # -n: fail instead of waiting for a password nobody can type
+    result = subprocess.run(
+        ["sudo", "-n", "shutdown", "-h", "now"], capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        log(f"Shutdown failed: {result.stderr.strip() or f'exit code {result.returncode}'}")
+        log("  This user needs passwordless sudo for shutdown (see README).")
+        feedback_failure()
 
 
 # --- Button event state machine ---
@@ -134,7 +162,7 @@ def main():
 
     log("Button handler active on GPIO 27.")
     log("  Single press  → health report")
-    log("  Double press  → restart Docker services")
+    log("  Double press  → restart p4n4 containers")
     log(f"  Hold {LONG_PRESS_SECS:.0f}s        → graceful shutdown")
     log("Press Ctrl+C to exit.")
 

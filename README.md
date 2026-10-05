@@ -21,7 +21,8 @@ hw/
 
 ## Hardware
 
-All PCB designs use [KiCad](https://www.kicad.org/) (v8+).
+All PCB designs use [KiCad](https://www.kicad.org/) (v8+). They're work in progress: the
+board and PCB files are still empty placeholders.
 
 | Design | Location | Description |
 |---|---|---|
@@ -39,11 +40,23 @@ All scripts run on a **Raspberry Pi 5** and share a common GPIO pin assignment:
 
 Shared logic (GPIO setup, LED helpers, service catalogue, TCP probe) lives in `p4n4_common.py` and is imported by every script.
 
-**Requirements:** `RPi.GPIO`, and `paho-mqtt` for the MQTT indicator only.
+**Requirements:** the `RPi.GPIO` API, and `paho-mqtt` 2.0 or later for the MQTT indicator only.
+
+On the Raspberry Pi 5, `RPi.GPIO` has to be the [`rpi-lgpio`](https://rpi-lgpio.readthedocs.io/)
+drop-in. The original `RPi.GPIO` can't drive the Pi 5's GPIO, which moved to the RP1 chip; it
+fails with "Cannot determine SOC peripheral base address". Install the drop-in from apt (it
+replaces `python3-rpi.gpio`), then create a virtual environment that can see it: Raspberry Pi
+OS blocks `pip install` outside one.
 
 ```bash
-pip install RPi.GPIO paho-mqtt
+sudo apt install python3-rpi-lgpio
+python3 -m venv --system-site-packages ~/.venvs/p4n4-hw
+~/.venvs/p4n4-hw/bin/pip install "paho-mqtt>=2"
+~/.venvs/p4n4-hw/bin/python scripts/rpi5/p4n4_health_monitor.py
 ```
+
+On a workstation, [p4n4-emu](https://github.com/raisga/p4n4-emu)'s `gpio_stub` provides the
+same API without hardware.
 
 ---
 
@@ -95,7 +108,11 @@ Probes all p4n4 platform services via TCP every 10 seconds and reflects aggregat
 |---|---|
 | All services up | Double heartbeat pulse every 4 s |
 | Non-critical service(s) down | Slow blink — one blink per failing service (350 ms) |
-| Critical service down (`p4n4-api`) | Rapid 6-pulse alert burst (120 ms) |
+| Critical service down (`mosquitto` or `influxdb`) | Rapid 6-pulse alert burst (120 ms) |
+
+The broker and InfluxDB are critical because every other service depends on them. Set
+`P4N4_CRITICAL_SERVICES` (comma-separated labels from the report, e.g.
+`mosquitto,influxdb,node-red`) to choose others.
 
 ```
 [p4n4] Health report — 2025-01-15 14:32:00
@@ -104,7 +121,7 @@ Probes all p4n4 platform services via TCP every 10 seconds and reflects aggregat
   mosquitto                  1883  UP
   influxdb                   8086  UP
   ...
-  p4n4-api                   8000  DOWN [critical]
+  p4n4-api                   8000  DOWN
 ```
 
 ```bash
@@ -120,8 +137,19 @@ Listens for press events on GPIO 27 and dispatches one of three actions based on
 | Press type | Action | LED feedback |
 |---|---|---|
 | Single press | Print live health report (TCP probe) | 1 short pulse |
-| Double press | `docker restart` all non-critical services | 3-pulse burst |
-| Long press (3 s) | Graceful system shutdown (`sudo shutdown -h now`) | Fade-out |
+| Double press | `docker restart` each p4n4 container (`p4n4-mqtt`, `p4n4-influxdb`, …) | 3-pulse burst |
+| Long press (3 s) | Graceful system shutdown (`sudo -n shutdown -h now`) | Fade-out |
+
+A restart or shutdown that fails ends with a rapid 6-pulse burst, and the log says why.
+Containers that aren't on this host (a stack that isn't installed) are skipped.
+
+The user running the script needs access to Docker (the `docker` group) for restarts, and
+passwordless sudo for `shutdown`. On an account without it, a narrow sudoers rule is enough:
+
+```bash
+echo "$USER ALL=(root) NOPASSWD: /usr/sbin/shutdown" | sudo tee /etc/sudoers.d/p4n4-shutdown
+sudo chmod 0440 /etc/sudoers.d/p4n4-shutdown
+```
 
 ```bash
 python3 scripts/rpi5/p4n4_button_handler.py
@@ -131,19 +159,19 @@ python3 scripts/rpi5/p4n4_button_handler.py
 
 ### `p4n4_mqtt_indicator.py`
 
-Subscribes to key MQTT topics and pulses the LED for each arriving message. Alert topics (`alert/#`, `error/#`) trigger a faster burst instead of a single pulse. Falls back to a slow idle heartbeat when no traffic is present.
+Subscribes to the topics the platform publishes on (`sensors/#`, `inference/#`, `devices/#`, `alerts/#`) and pulses the LED for each arriving message. Alerts (`alerts/<device-id>/critical`, `alerts/escalated`) trigger a faster burst instead of a single pulse. Falls back to a slow idle heartbeat when no traffic is present.
 
 | Event | LED pattern |
 |---|---|
 | Normal message | Single pulse (50 ms on/off) |
-| Alert / error message | 5-pulse burst (80 ms on / 50 ms off) |
+| Alert message | 5-pulse burst (80 ms on / 50 ms off) |
 | Idle (no traffic for 8 s) | Single heartbeat pulse |
 
-Default broker: `localhost:1883`. Override with `--host` / `--port`.
+Default broker: `localhost:1883`. Override with `--host` / `--port`. When the broker requires a login, set `MQTT_USER` and `MQTT_PASSWORD` in the environment (or pass `--username` / `--password`, though other users can see options in the process list).
 
 ```bash
-pip install paho-mqtt
-python3 scripts/rpi5/p4n4_mqtt_indicator.py [--host HOST] [--port PORT]
+MQTT_USER=indicator MQTT_PASSWORD=... \
+  ~/.venvs/p4n4-hw/bin/python scripts/rpi5/p4n4_mqtt_indicator.py [--host HOST] [--port PORT]
 ```
 
 ---

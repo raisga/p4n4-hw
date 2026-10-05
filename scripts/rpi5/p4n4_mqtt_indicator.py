@@ -1,26 +1,32 @@
 #!/usr/bin/env python3
 # Reflects live MQTT traffic on the p4n4 platform via the GPIO LED on pin 17.
 # A short pulse fires for each arriving message; alert topics trigger a rapid burst.
-# Requires: paho-mqtt  (pip install paho-mqtt)
+# Requires: paho-mqtt 2.0 or later  (pip install "paho-mqtt>=2")
 
 import argparse
+import os
+import sys
 import threading
 import time
 import RPi.GPIO as GPIO
 import paho.mqtt.client as mqtt
 from p4n4_common import setup_gpio, led_off, blink, log
 
+if not hasattr(mqtt, "CallbackAPIVersion"):
+    sys.exit('[p4n4] Needs paho-mqtt 2.0 or later: pip install "paho-mqtt>=2"')
+
 BROKER_HOST = "localhost"
 BROKER_PORT = 1883
 KEEPALIVE   = 60
 
-# Topics the indicator subscribes to. Each entry: (topic_filter, alert)
-# alert=True fires a rapid burst instead of a single pulse.
+# Topics the indicator subscribes to: the ones the platform publishes on.
+# Each entry: (topic_filter, alert); alert=True fires a rapid burst instead of
+# a single pulse.
 TOPICS = [
-    ("p4n4/#",          False),   # all p4n4 telemetry
-    ("homeassistant/#", False),   # HA discovery / state
-    ("alert/#",         True),    # platform alerts
-    ("error/#",         True),    # error events
+    ("sensors/#",   False),   # readings: sensors/<device-id>/<measurement>
+    ("inference/#", False),   # edge results: inference/<device-id>/result
+    ("devices/#",   False),   # devices/<device-id>/register and /status
+    ("alerts/#",    True),    # alerts/<device-id>/critical, alerts/escalated
 ]
 
 # LED timing (seconds)
@@ -62,26 +68,20 @@ def _is_alert_topic(topic: str) -> bool:
     return any(alert and mqtt.topic_matches_sub(f, topic) for f, alert in TOPICS)
 
 
-# --- MQTT callbacks ---
+# --- MQTT callbacks (paho's VERSION2 API; userdata is the broker's "host:port") ---
 
-def on_connect(client, userdata, flags, rc):
-    codes = {
-        0: "connected",
-        1: "refused — bad protocol",
-        2: "refused — client ID rejected",
-        3: "refused — broker unavailable",
-        4: "refused — bad credentials",
-        5: "refused — not authorised",
-    }
-    log(f"MQTT {codes.get(rc, f'unknown rc={rc}')} ({BROKER_HOST}:{BROKER_PORT})")
-    if rc == 0:
-        for topic, _ in TOPICS:
-            client.subscribe(topic)
-            log(f"  subscribed → {topic}")
+def on_connect(client, userdata, flags, reason_code, properties):
+    if reason_code.is_failure:
+        log(f"MQTT refused: {reason_code} ({userdata})")
+        return
+    log(f"MQTT connected ({userdata})")
+    for topic, _ in TOPICS:
+        client.subscribe(topic)
+        log(f"  subscribed → {topic}")
 
 
-def on_disconnect(client, userdata, rc):
-    log(f"MQTT disconnected (rc={rc}), reconnecting...")
+def on_disconnect(client, userdata, flags, reason_code, properties):
+    log(f"MQTT disconnected ({reason_code}), reconnecting...")
 
 
 def on_message(client, userdata, msg):
@@ -122,6 +122,17 @@ def parse_args():
     p = argparse.ArgumentParser(description="p4n4 MQTT LED activity indicator")
     p.add_argument("--host", default=BROKER_HOST, help="MQTT broker host")
     p.add_argument("--port", type=int, default=BROKER_PORT, help="MQTT broker port")
+    p.add_argument(
+        "--username",
+        default=os.environ.get("MQTT_USER", ""),
+        help="MQTT username (default: $MQTT_USER)",
+    )
+    p.add_argument(
+        "--password",
+        default=os.environ.get("MQTT_PASSWORD", ""),
+        help="MQTT password (default: $MQTT_PASSWORD; prefer it over the option, "
+        "which other users can see in the process list)",
+    )
     return p.parse_args()
 
 
@@ -129,13 +140,21 @@ def main():
     args = parse_args()
     setup_gpio()
 
-    client = mqtt.Client(client_id="p4n4-mqtt-indicator")
+    client = mqtt.Client(
+        mqtt.CallbackAPIVersion.VERSION2,
+        client_id="p4n4-mqtt-indicator",
+        userdata=f"{args.host}:{args.port}",
+    )
+    if args.username:
+        client.username_pw_set(args.username, args.password or None)
     client.on_connect    = on_connect
     client.on_disconnect = on_disconnect
     client.on_message    = on_message
 
     log(f"Connecting to {args.host}:{args.port}...")
-    client.connect(args.host, args.port, keepalive=KEEPALIVE)
+    # connect_async: the network loop keeps retrying, so the indicator can start
+    # before the broker does (at boot)
+    client.connect_async(args.host, args.port, keepalive=KEEPALIVE)
     client.loop_start()
 
     stop_event = threading.Event()

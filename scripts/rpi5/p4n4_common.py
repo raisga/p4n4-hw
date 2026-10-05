@@ -1,31 +1,52 @@
 #!/usr/bin/env python3
-"""Shared GPIO helpers, service catalogue, and health utilities for p4n4 scripts."""
+"""Shared GPIO helpers, service catalogue, and health utilities for p4n4 scripts.
 
-import RPi.GPIO as GPIO
+GPIO goes through the RPi.GPIO API. On a Raspberry Pi 5 that has to be the
+rpi-lgpio drop-in (`sudo apt install python3-rpi-lgpio`): the original RPi.GPIO
+can't drive the Pi 5's GPIO, which moved to the RP1 chip. On a workstation,
+p4n4-emu's gpio_stub provides the same API.
+"""
+
+import os
 import socket
 import time
 from datetime import datetime
+
+import RPi.GPIO as GPIO
 
 # --- Constants ---
 
 LED_PIN       = 17    # BCM
 PROBE_TIMEOUT = 1.0   # TCP connect timeout (seconds)
 
+# Services the platform can't work without: the MQTT broker and InfluxDB, which
+# the others depend on. A comma-separated P4N4_CRITICAL_SERVICES overrides them.
+CRITICAL_SERVICES = {
+    name.strip()
+    for name in os.environ.get("P4N4_CRITICAL_SERVICES", "mosquitto,influxdb").split(",")
+    if name.strip()
+}
+
+# (label, host, port, critical)
 SERVICES = [
-    ("mosquitto",           "localhost", 1883,  False),
-    ("influxdb",            "localhost", 8086,  False),
-    ("node-red",            "localhost", 1880,  False),
-    ("grafana",             "localhost", 3000,  False),
-    ("ollama",              "localhost", 11434, False),
-    ("letta",               "localhost", 8283,  False),
-    ("n8n",                 "localhost", 5678,  False),
-    ("edge-impulse-runner", "localhost", 8080,  False),
-    ("p4n4-api",            "localhost", 8000,  True),
+    (label, host, port, label in CRITICAL_SERVICES)
+    for label, host, port in [
+        ("mosquitto",           "localhost", 1883),
+        ("influxdb",            "localhost", 8086),
+        ("node-red",            "localhost", 1880),
+        ("grafana",             "localhost", 3000),
+        ("ollama",              "localhost", 11434),
+        ("letta",               "localhost", 8283),
+        ("n8n",                 "localhost", 5678),
+        ("edge-impulse-runner", "localhost", 8080),
+        ("p4n4-api",            "localhost", 8000),
+    ]
 ]
 
+# The stacks' container names (their compose files' container_name)
 DOCKER_SERVICES = [
-    "mosquitto", "influxdb", "node-red", "grafana",
-    "ollama", "letta", "n8n", "edge-impulse-runner",
+    "p4n4-mqtt", "p4n4-influxdb", "p4n4-node-red", "p4n4-grafana",
+    "p4n4-ollama", "p4n4-letta", "p4n4-n8n", "p4n4-ei-runner",
 ]
 
 
@@ -38,9 +59,17 @@ def log(msg: str) -> None:
 # --- GPIO helpers ---
 
 def setup_gpio(initial_state=GPIO.LOW) -> None:
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setwarnings(False)
-    GPIO.setup(LED_PIN, GPIO.OUT)
+    try:
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setwarnings(False)
+        GPIO.setup(LED_PIN, GPIO.OUT)
+    except RuntimeError as exc:
+        # The original RPi.GPIO on a Pi 5: "Cannot determine SOC peripheral base address"
+        raise SystemExit(
+            f"[p4n4] GPIO unavailable: {exc}\n"
+            "[p4n4] On a Raspberry Pi 5, install the rpi-lgpio drop-in for RPi.GPIO: "
+            "sudo apt install python3-rpi-lgpio"
+        ) from exc
     GPIO.output(LED_PIN, initial_state)
 
 

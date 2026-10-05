@@ -1,0 +1,4 @@
+__pycache__/
+
+# KiCad's per-user editor state
+*.kicad_prl
