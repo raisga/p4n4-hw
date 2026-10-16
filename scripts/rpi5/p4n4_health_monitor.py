@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
-# Monitors p4n4 platform service health by probing TCP ports and reflects
-# the overall status on the GPIO LED: heartbeat = all healthy,
+# Monitors p4n4 platform service health (p4n4-api's /ready, TCP probes for the rest) and
+# reflects the overall status on the GPIO LED: heartbeat = all healthy,
 # warn blink = degraded, rapid alert = critical service down.
 
 import time
+
 import RPi.GPIO as GPIO
+
 from p4n4_common import (
-    LED_PIN, SERVICES,
-    setup_gpio, led_off, blink,
-    check_services, print_report, log,
+    API_URL,
+    LED_PIN,
+    SERVICES,
+    blink,
+    check_services,
+    led_off,
+    log,
+    print_report,
+    setup_gpio,
 )
 
 CHECK_INTERVAL  = 10.0  # seconds between full health sweeps
@@ -43,6 +51,10 @@ def main():
     setup_gpio()
     log("Health monitor started. Ctrl+C to stop.")
     log(f"Checking {len(SERVICES)} services every {CHECK_INTERVAL}s on GPIO {LED_PIN}.")
+    if API_URL:
+        log(f"  p4n4-api's {API_URL}/ready first, TCP probes when it doesn't answer.")
+    else:
+        log("  TCP probes only (P4N4_API_URL=off).")
 
     last_check = 0.0
     results, n_down, critical_down = [], 0, False

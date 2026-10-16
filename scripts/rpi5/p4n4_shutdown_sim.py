@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 # Simulates the p4n4 platform graceful-shutdown sequence on a Raspberry Pi 5.
-# Phases are the reverse of boot: API → Edge AI → GenAI → IoT → network bridge → kernel → power-off.
+# Phases are the reverse of boot: API → edge inference → GenAI → IoT → network bridge → kernel →
+# power-off.
 
 import time
+
 import RPi.GPIO as GPIO
-from p4n4_common import setup_gpio, led_off, blink, burst, fade_out, log
+
+from p4n4_common import blink, burst, fade_out, led_off, log, setup_gpio
 
 # Phase timing constants (seconds)
 PHASE_STOP_INTERVAL    = 0.6
@@ -21,7 +24,7 @@ def phase_stop_api():
 
 
 def phase_stop_edge_stack():
-    log("Stopping Edge AI stack...")
+    log("Stopping edge inference (AI stack, ei-runner)...")
     log("  edge-impulse-runner :8080")
     blink(1, PHASE_STOP_INTERVAL)
     time.sleep(0.1)
@@ -37,7 +40,9 @@ def phase_stop_ai_stack():
 
 def phase_stop_iot_stack():
     log("Stopping IoT stack (MING)...")
-    for service in ["grafana     :3000", "node-red    :1880", "influxdb    :8086", "mosquitto   :1883"]:
+    for service in [
+        "grafana     :3000", "node-red    :1880", "influxdb    :8086", "mosquitto   :1883",
+    ]:
         log(f"  {service}")
         blink(1, PHASE_STOP_INTERVAL)
         time.sleep(0.1)

@@ -1,0 +1,21 @@
+# p4n4 hardware daemon. install-hwd.sh fills in @USER@, @PYTHON@ and @SCRIPTS@.
+[Unit]
+Description=p4n4 hardware daemon (status LED, button, MQTT node status)
+Documentation=https://github.com/raisga/p4n4-hw
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# The user's groups apply: gpio for the pins, docker for the double-press restart
+User=@USER@
+EnvironmentFile=-/etc/p4n4/hwd.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@PYTHON@ @SCRIPTS@/p4n4_hwd.py
+Restart=on-failure
+RestartSec=5
+# Leaves time to publish online=false
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

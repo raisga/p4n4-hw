@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 # Simulates the p4n4 platform boot-up sequence on a Raspberry Pi 5.
-# Phases mirror a real p4n4 node: hardware init → system services → Docker → MING → GenAI → Edge AI → ready.
+# Phases mirror a real p4n4 node: hardware init → system services → Docker → MING → GenAI →
+# edge inference → ready.
+# GenAI and edge inference are both the AI stack (p4n4-ai); the runner is its ei-runner profile.
 
 import time
+
 import RPi.GPIO as GPIO
-from p4n4_common import setup_gpio, led_on, led_off, blink, burst, log
+
+from p4n4_common import blink, burst, led_off, led_on, log, setup_gpio
 
 # Phase timing constants (seconds)
 PHASE_POST_INTERVAL       = 0.08
@@ -52,7 +56,9 @@ def phase_network_bridge():
 
 def phase_iot_stack():
     log("Starting IoT stack (MING)...")
-    for service in ["mosquitto   :1883", "influxdb    :8086", "node-red    :1880", "grafana     :3000"]:
+    for service in [
+        "mosquitto   :1883", "influxdb    :8086", "node-red    :1880", "grafana     :3000",
+    ]:
         log(f"  {service}")
         blink(1, PHASE_STACK_INTERVAL)
         time.sleep(0.1)
@@ -67,7 +73,7 @@ def phase_ai_stack():
 
 
 def phase_edge_stack():
-    log("Starting Edge AI stack...")
+    log("Starting edge inference (AI stack, ei-runner)...")
     log("  edge-impulse-runner :8080")
     blink(1, PHASE_STACK_INTERVAL)
     time.sleep(0.1)

@@ -8,9 +8,11 @@ import os
 import sys
 import threading
 import time
-import RPi.GPIO as GPIO
+
 import paho.mqtt.client as mqtt
-from p4n4_common import setup_gpio, led_off, blink, log
+import RPi.GPIO as GPIO
+
+from p4n4_common import blink, led_off, log, setup_gpio
 
 if not hasattr(mqtt, "CallbackAPIVersion"):
     sys.exit('[p4n4] Needs paho-mqtt 2.0 or later: pip install "paho-mqtt>=2"')
@@ -64,7 +66,7 @@ def _mark_message(alert: bool):
         _last_message_ts = time.monotonic()
 
 
-def _is_alert_topic(topic: str) -> bool:
+def is_alert_topic(topic: str) -> bool:
     return any(alert and mqtt.topic_matches_sub(f, topic) for f, alert in TOPICS)
 
 
@@ -85,7 +87,7 @@ def on_disconnect(client, userdata, flags, reason_code, properties):
 
 
 def on_message(client, userdata, msg):
-    alert = _is_alert_topic(msg.topic)
+    alert = is_alert_topic(msg.topic)
     _mark_message(alert)
     log(f"[{'ALERT' if alert else 'MSG'}] {msg.topic}  ({len(msg.payload)}B)")
 

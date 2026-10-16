@@ -1,0 +1,31 @@
+[project]
+name = "p4n4-hw"
+version = "0.1.0"
+description = "Hardware designs and Raspberry Pi 5 scripts for the p4n4 platform"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "RAISGA", email = "jraleman@raisga.com" }]
+# RPi.GPIO isn't listed: on the Pi it's the rpi-lgpio drop-in from apt (see README),
+# and the tests replace it with a fake
+dependencies = ["paho-mqtt>=2.0"]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.4"]
+
+[tool.uv]
+# Scripts, not a package: uv installs the dependencies only
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# The scripts import each other as top-level modules: first-party for import sorting
+src = ["scripts/rpi5"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["scripts/rpi5"]

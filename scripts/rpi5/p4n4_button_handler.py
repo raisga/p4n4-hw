@@ -8,14 +8,21 @@
 # LED on pin 17 gives feedback: pulse = action triggered, burst = restart,
 # fade = shutdown, rapid blinks = the restart or shutdown failed.
 
-import subprocess
-import time
 import threading
+import time
+
 import RPi.GPIO as GPIO
+
 from p4n4_common import (
-    DOCKER_SERVICES,
-    setup_gpio, led_off, blink, fade_out,
-    check_services, print_report, log,
+    blink,
+    check_services,
+    fade_out,
+    led_off,
+    log,
+    print_report,
+    request_shutdown,
+    restart_containers,
+    setup_gpio,
 )
 
 BUTTON_PIN = 27   # BCM — pulled up internally; button connects pin to GND
@@ -54,23 +61,7 @@ def action_health_report():
 def action_restart_services():
     log("Restarting p4n4 containers...")
     feedback_restart()
-    failed = []
-    for name in DOCKER_SERVICES:
-        try:
-            result = subprocess.run(
-                ["docker", "restart", name], timeout=60, capture_output=True, text=True
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-            log(f"  {name}: {e}")
-            failed.append(name)
-            continue
-        if result.returncode == 0:
-            log(f"  {name}: restarted")
-        elif "No such container" in result.stderr:
-            log(f"  {name}: not on this host, skipped")
-        else:
-            log(f"  {name}: failed — {result.stderr.strip()}")
-            failed.append(name)
+    failed = restart_containers()
     if failed:
         log(f"Restart failed for: {', '.join(failed)}")
         feedback_failure()
@@ -90,12 +81,9 @@ def action_shutdown():
     log("Initiating shutdown.")
     feedback_shutdown()
     time.sleep(0.5)
-    # -n: fail instead of waiting for a password nobody can type
-    result = subprocess.run(
-        ["sudo", "-n", "shutdown", "-h", "now"], capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        log(f"Shutdown failed: {result.stderr.strip() or f'exit code {result.returncode}'}")
+    error = request_shutdown()
+    if error:
+        log(f"Shutdown failed: {error}")
         log("  This user needs passwordless sudo for shutdown (see README).")
         feedback_failure()
 
@@ -105,10 +93,14 @@ def action_shutdown():
 class ButtonHandler:
     """
     Tracks press/release edges and classifies them as single, double, or long.
-    Runs the resolved action in a daemon thread to keep the GPIO callback fast.
+    Runs the resolved action in a daemon thread to keep the GPIO callback fast:
+    on_single, on_double and on_long, by default this script's actions.
     """
 
-    def __init__(self):
+    def __init__(self, on_single=None, on_double=None, on_long=None):
+        self._on_single   = on_single or action_health_report
+        self._on_double   = on_double or action_restart_services
+        self._on_long     = on_long or action_shutdown
         self._press_time  = 0.0
         self._press_count = 0
         self._timer       = None
@@ -127,7 +119,7 @@ class ButtonHandler:
             held = time.monotonic() - self._press_time
             if held >= LONG_PRESS_SECS:
                 self._press_count = 0
-                threading.Thread(target=action_shutdown, daemon=True).start()
+                threading.Thread(target=self._on_long, daemon=True).start()
                 return
             self._timer = threading.Timer(DOUBLE_PRESS_GAP, self._resolve)
             self._timer.daemon = True
@@ -138,9 +130,9 @@ class ButtonHandler:
             count = self._press_count
             self._press_count = 0
         if count == 1:
-            threading.Thread(target=action_health_report, daemon=True).start()
+            threading.Thread(target=self._on_single, daemon=True).start()
         elif count >= 2:
-            threading.Thread(target=action_restart_services, daemon=True).start()
+            threading.Thread(target=self._on_double, daemon=True).start()
 
 
 _handler = ButtonHandler()
